@@ -4,9 +4,10 @@ const sendBtn = document.getElementById('send-btn');
 const clearBtn = document.getElementById('clear-btn');
 const loadingIndicator = document.getElementById('loading-indicator');
 const scrollBtn = document.getElementById("scroll-down-btn");
-const input = document.getElementById("user-input");
-const inputDiv = document.querySelector(".input-div");
 const footer = document.querySelector('footer');
+
+// --- ВИПРАВЛЕННЯ 1: Отримуємо збережену сесію або NULL ---
+let currentSessionId = localStorage.getItem("chatSessionId");
 
 function addMessage(text, sender, isHtml = false) {
     const msgDiv = document.createElement('div');
@@ -48,7 +49,7 @@ async function sendMessage() {
 
     addMessage(text, 'user');
     userInput.innerHTML = '';
-    userInput.style.height = 'auto';
+    userInput.style.height = 'auto'; // Скидаємо висоту
 
     loadingIndicator.classList.remove('hidden');
     updateSendButtonState();
@@ -56,15 +57,28 @@ async function sendMessage() {
     chatBox.scrollTop = chatBox.scrollHeight;
 
     try {
+        // --- ВИПРАВЛЕННЯ 2: Передаємо sessionId ---
         const response = await fetch('/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text })
+            body: JSON.stringify({ 
+                message: text,
+                sessionId: currentSessionId 
+            })
         });
 
         const data = await response.json();
-        let cleanText = data.response;
 
+        // --- ВИПРАВЛЕННЯ 3: Зберігаємо нову сесію, якщо сервер її видав ---
+        if (data.sessionId) {
+            currentSessionId = data.sessionId;
+            localStorage.setItem("chatSessionId", currentSessionId);
+        }
+
+        // Захист: якщо response прийшов пустим або undefined
+        let cleanText = data.response || "Вибачте, я не отримав відповіді.";
+
+        // Твоя логіка очистки тексту
         cleanText = cleanText.replace(
             /(^|\n)1\. ([^\n]+)(\n(?!2\. ).+)?(?=\n\n|$)/g,
             (match, start, item, extra) => {
@@ -84,8 +98,9 @@ async function sendMessage() {
 
     } catch (error) {
         loadingIndicator.classList.add('hidden');
-        addMessage("Помилка з'єднання. Перевірте консоль.", 'bot');
-        console.error(error);
+        // Тепер в консолі буде видно справжню помилку
+        console.error("Деталі помилки:", error);
+        addMessage("Помилка з'єднання. Спробуйте оновити сторінку.", 'bot');
     }
 }
 
@@ -98,30 +113,33 @@ document.addEventListener('keypress', (e) => {
     }
 });
 
-clearBtn.addEventListener('click', () => location.reload());
+clearBtn.addEventListener('click', () => {
+    // Очищаємо сесію при очищенні чату (опціонально)
+    localStorage.removeItem("chatSessionId");
+    location.reload();
+});
 
 userInput.addEventListener("input", () => {
     if (userInput.innerText.trim() === "") {
         userInput.innerHTML = "";
     }
+    updateSendButtonState(); // Оновлюємо кнопку
+    updateScrollBtnPosition(); // Оновлюємо скрол
 });
 
+// Обробка вставки тексту (Paste)
 userInput.addEventListener('paste', (e) => {
     e.preventDefault();
-
     const text = (e.clipboardData || window.clipboardData).getData('text/plain') || '';
-
-    if (document.queryCommandSupported('insertText')) {
-        document.execCommand('insertText', false, text);
-    } else {
-        const selection = window.getSelection();
-        if (!selection.rangeCount) return;
-        const range = selection.getRangeAt(0);
-        range.deleteContents();
-        range.insertNode(document.createTextNode(text));
-        range.collapse(false);
-    }
+    
+    // Вставляємо чистий текст
+    const selection = window.getSelection();
+    if (!selection.rangeCount) return;
+    selection.deleteFromDocument();
+    selection.getRangeAt(0).insertNode(document.createTextNode(text));
+    selection.collapseToEnd();
 });
+
 
 document.addEventListener("mousedown", (e) => {
     const isChatText = e.target.closest(".message .content");
@@ -130,15 +148,13 @@ document.addEventListener("mousedown", (e) => {
     if (!isChatText && !isInput) {
         window.getSelection()?.removeAllRanges();
     }
-
 });
 
-const scrollDownBtn = document.getElementById("scroll-down-btn");
+const scrollDownBtn = document.getElementById("scroll-down-btn"); // Повертаємо змінну
 
 function updateScrollButton() {
-    const nearBottom =
-        chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < 140;
-
+    if (!scrollDownBtn) return;
+    const nearBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < 140;
     if (nearBottom) {
         scrollDownBtn.classList.remove("show");
     } else {
@@ -148,46 +164,34 @@ function updateScrollButton() {
 
 chatBox.addEventListener("scroll", updateScrollButton);
 
-scrollDownBtn.addEventListener("click", () => {
-    chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: "smooth" });
-});
+if (scrollDownBtn) {
+    scrollDownBtn.addEventListener("click", () => {
+        chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: "smooth" });
+    });
+}
 
 function updateScrollBtnPosition() {
+    if (!scrollBtn) return;
     const footerHeight = footer.offsetHeight;
-
     let offset = 20;
-
-    if (window.innerWidth < 480) {
-        offset = 15;
-    } else if (window.innerWidth < 768) {
-        offset = 20;
-    }
-
+    if (window.innerWidth < 480) offset = 15;
+    else if (window.innerWidth < 768) offset = 20;
     scrollBtn.style.bottom = (footerHeight + offset) + "px";
 }
 
 window.addEventListener("resize", updateScrollBtnPosition);
-userInput.addEventListener("input", updateScrollBtnPosition);
-chatBox.addEventListener("scroll", updateScrollBtnPosition);
+// userInput input вже має слухача вище
+// chatBox scroll вже має слухача вище
 updateScrollBtnPosition();
 
 function updateClearButtonState() {
     const clearBtn = document.getElementById("clear-btn");
-
     const messages = [...document.querySelectorAll(".message")]
         .filter(m => !m.classList.contains("system-message"));
-
     clearBtn.classList.toggle("disabled", messages.length === 0);
 }
 
-document.getElementById("clear-btn").addEventListener("click", () => {
-    const main = document.querySelector("main");
-    const systemMessage = document.querySelector(".system-message");
-    main.innerHTML = "";
-    if (systemMessage) main.appendChild(systemMessage);
-    updateClearButtonState();
-});
-
+// Observer для кнопки очищення
 const observer = new MutationObserver(updateClearButtonState);
 observer.observe(document.querySelector("main"), { childList: true });
 updateClearButtonState();
@@ -195,16 +199,16 @@ updateClearButtonState();
 function updateSendButtonState() {
     const textEmpty = userInput.innerText.trim().length === 0;
     const isLoading = !loadingIndicator.classList.contains("hidden");
-
     sendBtn.classList.toggle("disabled", textEmpty || isLoading);
 }
 
-userInput.addEventListener("input", updateSendButtonState);
+// Observer для кнопки відправки
 const observerSend = new MutationObserver(updateSendButtonState);
 observerSend.observe(loadingIndicator, { attributes: true });
 updateSendButtonState();
 
 function linkify(text) {
+    // Простий regex для посилань
     const urlRegex = /(https?:\/\/[^\s<]+)/g;
     return text.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
 }
